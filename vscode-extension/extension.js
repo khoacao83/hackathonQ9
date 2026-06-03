@@ -98,31 +98,58 @@ async function runSafePatchFlow() {
 
   const docText = editor.document.getText();
 
-  const models = await vscode.lm.selectChatModels({ vendor: 'copilot' });
-  const model = models[0];
-  if (!model) {
-    throw new Error('No Copilot language model available for this user.');
+  const previousErrors = await getPreviousRunError(workspaceRoot);
+
+  let patchText = '';
+  let model = null;
+
+  try {
+    const models = await vscode.lm.selectChatModels({ vendor: 'copilot' });
+    if (models && models.length > 0) {
+      model = models.find(m => 
+        m.name.toLowerCase().includes('claude-3.5-sonnet') || 
+        m.id.toLowerCase().includes('claude-3.5-sonnet') ||
+        m.name.toLowerCase().includes('claude-3-5-sonnet') || 
+        m.id.toLowerCase().includes('claude-3-5-sonnet')
+      );
+      if (!model) {
+        model = models.find(m => 
+          m.name.toLowerCase().includes('gpt-4o') || 
+          m.id.toLowerCase().includes('gpt-4o')
+        );
+      }
+      if (!model) {
+        model = models[0];
+      }
+    }
+  } catch (err) {
+    // Copilot not logged in or selectChatModels threw an error
   }
 
-  const prompt = buildPrompt(targetFileRel, task, docText);
-  let patchText = await requestPatchText(model, prompt);
-  patchText = normalizeModelPatchOutput(patchText).trim();
-  if (!patchText) {
-    throw new Error('Model returned empty patch text.');
-  }
-
-  if (!isUnifiedDiffPatch(patchText)) {
-    const repairPrompt = buildRepairPrompt(patchText, targetFileRel);
-    const repairedText = await requestPatchText(model, repairPrompt);
-    const repairedPatch = normalizeModelPatchOutput(repairedText).trim();
-
-    if (!isUnifiedDiffPatch(repairedPatch)) {
-      const reason =
-        'Model output is not a valid unified diff (missing --- a/, +++ b/, @@ headers).';
-      throw new Error(`${reason} Patch execution was cancelled.`);
+  if (model) {
+    const prompt = buildPrompt(targetFileRel, task, docText, previousErrors);
+    patchText = await requestPatchText(model, prompt);
+    patchText = normalizeModelPatchOutput(patchText).trim();
+    if (!patchText) {
+      throw new Error('Model returned empty patch text.');
     }
 
-    patchText = repairedPatch;
+    if (!isUnifiedDiffPatch(patchText)) {
+      const repairPrompt = buildRepairPrompt(patchText, targetFileRel);
+      const repairedText = await requestPatchText(model, repairPrompt);
+      const repairedPatch = normalizeModelPatchOutput(repairedText).trim();
+
+      if (!isUnifiedDiffPatch(repairedPatch)) {
+        const reason =
+          'Model output is not a valid unified diff (missing --- a/, +++ b/, @@ headers).';
+        throw new Error(`${reason} Patch execution was cancelled.`);
+      }
+
+      patchText = repairedPatch;
+    }
+  } else {
+    void vscode.window.showWarningMessage('Copilot LM API is unavailable. Using Mock/Fallback patch.');
+    patchText = generateMockPatch(targetFileRel, previousErrors);
   }
 
   const tmpDir = path.join(workspaceRoot, '.tmp');
@@ -214,19 +241,85 @@ async function showRunSummary() {
   output.show(true);
 }
 
-function buildPrompt(targetFile, task, code) {
-  return [
+function buildPrompt(targetFile, task, code, previousErrors) {
+  const lines = [
     'Return unified diff only.',
     'Do not explain.',
     'Do not modify files outside allowed context.',
     'Do not touch .env, secrets, credentials.',
     '',
     `Target file: ${targetFile}`,
-    `Task: ${task}`,
-    '',
-    'Current file content:',
-    code,
-  ].join('\n');
+    `Task: ${task}`
+  ];
+
+  if (previousErrors && previousErrors.length > 0) {
+    lines.push('');
+    lines.push('Previous run failed with the following errors:');
+    for (const err of previousErrors) {
+      lines.push(`- ${err}`);
+    }
+  }
+
+  lines.push('');
+  lines.push('Current file content:');
+  lines.push(code);
+
+  return lines.join('\n');
+}
+
+async function getPreviousRunError(workspaceRoot) {
+  const logPath = path.join(workspaceRoot, 'outputs', 'run_log.json');
+  try {
+    const raw = await fs.readFile(logPath, 'utf-8');
+    const data = JSON.parse(raw);
+    if (data.final_status === 'failed' || data.status === 'failed') {
+      return Array.isArray(data.last_error_summary) ? data.last_error_summary : [];
+    }
+  } catch (err) {
+    // ignore
+  }
+  return null;
+}
+
+function generateMockPatch(targetFile, previousErrors) {
+  const hasNoneError = previousErrors && previousErrors.some(err => 
+    err.toLowerCase().includes('nonetype') || err.toLowerCase().includes('none')
+  );
+
+  if (hasNoneError) {
+    // Attempt 2: Sửa đầy đủ cả None và mảng rỗng
+    return [
+      `--- a/${targetFile}`,
+      `+++ b/${targetFile}`,
+      `@@ -8,5 +8,5 @@`,
+      ` def export_report(data: list[dict[str, Any]] | None) -> str:`,
+      `-    if len(data) == 0:`,
+      `+    if data is None or len(data) == 0:`,
+      `         return "No data to export"`,
+      ` `,
+      `     return export_excel(data)`
+    ].join('\n');
+  } else {
+    // Attempt 1: Chỉ sửa mảng rỗng (vẫn crash khi data là None)
+    return [
+      `--- a/${targetFile}`,
+      `+++ b/${targetFile}`,
+      `@@ -8,8 +8,5 @@`,
+      `-def export_report(data: list[dict[str, Any]] | None) -> str:`,
+      `-    \"\"\"`,
+      `-    Bug demo:`,
+      `-    - [] nên trả về \"No data to export\"`,
+      `-    - None nên trả về \"No data to export\"`,
+      `-    - hiện tại chưa xử lý gì, cứ gọi export_excel`,
+      `-    \"\"\"`,
+      `-    return export_excel(data)`,
+      `+def export_report(data: list[dict[str, Any]] | None) -> str:`,
+      `+    if len(data) == 0:`,
+      `+        return "No data to export"`,
+      `+`,
+      `+    return export_excel(data)`
+    ].join('\n');
+  }
 }
 
 function buildRepairPrompt(previousOutput, targetFile) {
