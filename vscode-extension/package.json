@@ -1,8 +1,8 @@
 {
   "name": "ai-code-assembly-line-copilot",
   "displayName": "AI Code Assembly Line",
-  "description": "Generate safe patch with Copilot LM and run Python assembly pipeline",
-  "version": "0.0.1",
+  "description": "Extension-driven AI pipeline: scan context → Copilot LM → diff preview → user accept/reject → apply",
+  "version": "0.1.0",
   "publisher": "local",
   "engines": {
     "vscode": "^1.100.0"
@@ -15,13 +15,28 @@
     "commands": [
       {
         "command": "aiCodeAssembly.safePatchCurrentFile",
-        "title": "AI Code Assembly: Safe Patch Current File"
+        "title": "AI Code Assembly: Fix Current File"
       },
       {
         "command": "aiCodeAssembly.showRunSummary",
         "title": "AI Code Assembly: Show Last Run Summary"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "AI Code Assembly Line",
+      "properties": {
+        "aiCodeAssembly.pythonCommand": {
+          "type": "string",
+          "default": "python3",
+          "description": "Python command to use for the context service (e.g. python3, python)"
+        },
+        "aiCodeAssembly.policyPath": {
+          "type": "string",
+          "default": "configs/policy.yaml",
+          "description": "Path to the policy YAML file (relative to workspace)"
+        }
+      }
+    }
   },
   "scripts": {}
 }
