@@ -1,0 +1,27 @@
+{
+  "name": "ai-code-assembly-line-copilot",
+  "displayName": "AI Code Assembly Line",
+  "description": "Generate safe patch with Copilot LM and run Python assembly pipeline",
+  "version": "0.0.1",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "aiCodeAssembly.safePatchCurrentFile",
+        "title": "AI Code Assembly: Safe Patch Current File"
+      },
+      {
+        "command": "aiCodeAssembly.showRunSummary",
+        "title": "AI Code Assembly: Show Last Run Summary"
+      }
+    ]
+  },
+  "scripts": {}
+}

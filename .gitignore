@@ -1,0 +1,13 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.sandbox_workdir/
+.tmp/
+outputs/
+.DS_Store
+node_modules/
+dist/
+out/
+*.log
