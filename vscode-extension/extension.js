@@ -114,6 +114,8 @@ async function runAssemblyLinePipeline() {
     async (progress) => {
       progress.report({ message: '[1/4] Scanning & building context...' });
 
+      const previousErrors = await getPreviousRunError(workspaceRoot);
+
       let contextData;
       try {
         contextData = await callContextService(workspaceRoot, projectArg, targetFileRel);
@@ -143,7 +145,7 @@ async function runAssemblyLinePipeline() {
       const model = await getCopilotModel();
 
       if (model) {
-        const prompt = buildPrompt(targetFileRel, task, docText, optimizedContext);
+        const prompt = buildPrompt(targetFileRel, task, docText, optimizedContext, previousErrors);
         patchText = await requestPatchText(model, prompt);
         patchText = normalizeModelPatchOutput(patchText).trim();
 
@@ -169,7 +171,7 @@ async function runAssemblyLinePipeline() {
         void vscode.window.showWarningMessage(
           'Cannot connect to GitHub Copilot (not signed in). Using mock patch.'
         );
-        patchText = generateMockPatch(targetFileRel, task);
+        patchText = generateMockPatch(targetFileRel, task, previousErrors);
         output.appendLine('LLM backend: Mock (Copilot unavailable)');
       }
 
@@ -339,7 +341,7 @@ async function getCopilotModel() {
 //  Prompt builders
 // ─────────────────────────────────────────────
 
-function buildPrompt(targetFile, task, code, optimizedContext) {
+function buildPrompt(targetFile, task, code, optimizedContext, previousErrors) {
   const lines = [
     'You are a senior software engineer.',
     'Return unified diff only.',
@@ -351,12 +353,35 @@ function buildPrompt(targetFile, task, code, optimizedContext) {
     `Task: ${task}`,
   ];
 
+  if (previousErrors && previousErrors.length > 0) {
+    lines.push('');
+    lines.push('Previous run failed with the following errors:');
+    for (const err of previousErrors) {
+      lines.push(`- ${err}`);
+    }
+  }
+
   if (optimizedContext) {
     lines.push('', 'Related code context (optimized):', optimizedContext);
   }
 
   lines.push('', 'Current file content:', code);
   return lines.join('\n');
+}
+
+async function getPreviousRunError(workspaceRoot) {
+  const logPath = path.join(workspaceRoot, 'outputs', 'run_log.json');
+  try {
+    const raw = await fs.readFile(logPath, 'utf-8');
+    const data = JSON.parse(raw);
+    const status = String(data.final_status || data.status || '').toLowerCase();
+    if (status === 'failed' || status === 'failure') {
+      return Array.isArray(data.last_error_summary) ? data.last_error_summary : [];
+    }
+  } catch (err) {
+    // ignore
+  }
+  return null;
 }
 
 function buildRepairPrompt(previousOutput, targetFile) {
@@ -394,9 +419,27 @@ async function requestPatchText(model, prompt) {
 //  Mock patch generator (fallback khi chưa đăng nhập Copilot)
 // ─────────────────────────────────────────────
 
-function generateMockPatch(targetFile, task) {
+function generateMockPatch(targetFile, task, previousErrors) {
   if (targetFile.includes('report_service.py')) {
-    return `--- a/app/services/report_service.py
+    const hasNoneError = previousErrors && previousErrors.some(err => 
+      err.toLowerCase().includes('nonetype') || err.toLowerCase().includes('none')
+    );
+
+    if (hasNoneError) {
+      // Attempt 2: Sửa đầy đủ cả None và mảng rỗng
+      return `--- a/app/services/report_service.py
++++ b/app/services/report_service.py
+@@ -8,5 +8,5 @@
+ def export_report(data: list[dict[str, Any]] | None) -> str:
+-    if len(data) == 0:
++    if data is None or len(data) == 0:
+         return "No data to export"
+ 
+     return export_excel(data)
+`;
+    } else {
+      // Attempt 1: Chỉ sửa mảng rỗng (vẫn crash khi data là None)
+      return `--- a/app/services/report_service.py
 +++ b/app/services/report_service.py
 @@ -8,8 +8,5 @@
 -def export_report(data: list[dict[str, Any]] | None) -> str:
@@ -408,11 +451,12 @@ function generateMockPatch(targetFile, task) {
 -    """
 -    return export_excel(data)
 +def export_report(data: list[dict[str, Any]] | None) -> str:
-+    if data is None or len(data) == 0:
++    if len(data) == 0:
 +        return "No data to export"
 +
 +    return export_excel(data)
 `;
+    }
   }
 
   return `--- a/${targetFile}
