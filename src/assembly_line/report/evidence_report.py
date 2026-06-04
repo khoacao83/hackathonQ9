@@ -1,146 +1,89 @@
-from __future__ import annotations
-
-import json
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
-
-
-@dataclass
-class EvidenceReportWriter:
-    output_dir: str
-
-    def __post_init__(self) -> None:
-        self.out = Path(self.output_dir).resolve()
-        self.out.mkdir(parents=True, exist_ok=True)
-
-    def write(self, data: dict[str, Any]) -> dict[str, str]:
-        patch_path = self.out / "patch.diff"
-        report_path = self.out / "evidence_report.md"
-        log_path = self.out / "run_log.json"
-
-        patch_path.write_text(data.get("patch_text", ""), encoding="utf-8")
-        log_path.write_text(
-            json.dumps(data, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-
-        report_path.write_text(
-            self._render_markdown(data),
-            encoding="utf-8",
-        )
-
-        return {
-            "patch": str(patch_path),
-            "report": str(report_path),
-            "log": str(log_path),
-        }
-
-    def _render_markdown(self, data: dict[str, Any]) -> str:
-        related_files = data.get("related_files", [])
-        changed_files = data.get("changed_files", [])
-        errors = data.get("last_error_summary", [])
-        token_metrics = data.get("token_metrics", {})
-
-        related_md = "\n".join(f"- `{file}`" for file in related_files) or "- None"
-        changed_md = "\n".join(f"- `{file}`" for file in changed_files) or "- None"
-        errors_md = "\n".join(f"- {line}" for line in errors) or "- None"
-
-        final_status = data.get("final_status", "failed")
-        decision = (
-            "READY_FOR_HUMAN_REVIEW"
-            if final_status == "passed"
-            else "NEED_DEVELOPER_REVIEW"
-        )
-        engine = data.get("engine", {})
-        fence = "```"
-        return f"""# AI Code Assembly Line - Evidence Report
-
-## Metadata
-
-- Generated at: `{data.get("generated_at")}`
-- Final status: **{final_status.upper()}**
-- Final decision: **{decision}**
-
-## User Task
-
-{data.get("task")}
-
-## Target File
-
-`{data.get("target_file")}`
-
-## Related Files Detected
-
-{related_md}
-
-## Context Optimization
-
-- Raw context tokens: `{token_metrics.get("raw_tokens")}`
-- Optimized context tokens: `{token_metrics.get("optimized_tokens")}`
-- Saved tokens: `{token_metrics.get("saved_tokens")}`
-- Saved percent: `{token_metrics.get("saved_percent")}%`
-
-## Execution Engine
-
-- LLM provider: `{engine.get("llm_provider", "mock")}`
-- Docker sandbox: `{engine.get("use_docker", False)}`
-- Docker image: `{engine.get("docker_image", "ai-code-sandbox:py311")}`
-
-## Self-Healing
-
-- Attempts used: `{data.get("attempts_used")}`
-- Max attempts: `{data.get("max_attempts")}`
-
-## Error Log Used For Healing
-
-{errors_md}
-
-## Files Changed
-
-{changed_md}
-
-## Test Output Summary
-
-{fence}txt
-{data.get("last_test_output", "")[-3000:]}
-{fence}
 """
+Writes the audit trail after a successful pipeline run:
+  outputs/patch.diff
+  outputs/evidence_report.md
+  outputs/run_log.json
+"""
+import json
+from datetime import datetime
+from pathlib import Path
 
 
-def write_outputs(
+def write_report(
     output_dir: str,
     task: str,
     target_file: str,
-    related_files: list[str],
-    token_metrics: dict[str, Any],
-    changed_files: list[str],
-    final_status: str,
-    attempts_used: int,
-    last_error_summary: list[str],
     patch_text: str,
-    last_test_output: str,
-    max_attempts: int,
-    extra: dict[str, Any] | None = None,
-) -> dict[str, str]:
-    payload: dict[str, Any] = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+    changed_files: list[str],
+    attempts: int,
+    token_stats: dict,
+    test_output: str,
+    decision: str,
+) -> dict:
+    """
+    Write evidence artefacts to output_dir.
+
+    Returns a dict with paths to the three generated files.
+    """
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # 1. patch.diff
+    diff_path = out / "patch.diff"
+    diff_path.write_text(patch_text, encoding="utf-8")
+
+    # 2. evidence_report.md
+    md_lines = [
+        "# AI Code Assembly Line — Evidence Report",
+        "",
+        f"**Generated**: {timestamp}",
+        f"**Task**: {task}",
+        f"**Target file**: `{target_file}`",
+        f"**Decision**: `{decision}`",
+        "",
+        "## Token Optimization",
+        f"- Raw context tokens (est.): {token_stats.get('raw_tokens', 'N/A')}",
+        f"- Optimized context tokens (est.): {token_stats.get('opt_tokens', 'N/A')}",
+        f"- Saving: {token_stats.get('saving_pct', 'N/A')}%",
+        "",
+        f"## Self-Healing Attempts: {attempts}",
+        "",
+        "## Changed Files",
+    ]
+    for f in changed_files:
+        md_lines.append(f"- `{f}`")
+    md_lines += [
+        "",
+        "## Test Output (final run)",
+        "```",
+        test_output.strip(),
+        "```",
+        "",
+        "## Patch Applied",
+        "```diff",
+        patch_text.strip(),
+        "```",
+    ]
+    md_path = out / "evidence_report.md"
+    md_path.write_text("\n".join(md_lines), encoding="utf-8")
+
+    # 3. run_log.json
+    log = {
+        "timestamp": timestamp,
         "task": task,
         "target_file": target_file,
-        "related_files": related_files,
-        "token_metrics": token_metrics,
+        "decision": decision,
+        "attempts": attempts,
+        "token_stats": token_stats,
         "changed_files": changed_files,
-        "final_status": final_status,
-        "attempts_used": attempts_used,
-        "last_error_summary": last_error_summary,
-        "patch_text": patch_text,
-        "last_test_output": last_test_output,
-        "max_attempts": max_attempts,
     }
+    log_path = out / "run_log.json"
+    log_path.write_text(json.dumps(log, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    if extra:
-        payload.update(extra)
-
-    writer = EvidenceReportWriter(output_dir=output_dir)
-    return writer.write(payload)
+    return {
+        "diff": str(diff_path),
+        "report": str(md_path),
+        "log": str(log_path),
+    }

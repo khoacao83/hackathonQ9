@@ -1,0 +1,43 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug Pipeline",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "assembly_line.main",
+      "args": [
+        "--project", "demo_project",
+        "--file", "app/banking/payment_service.py",
+        "--task", "Fix payment transfer when balance cannot cover amount plus fee"
+      ],
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}\\src"
+      },
+      "cwd": "${workspaceFolder}",
+      "python": "${command:python.interpreterPath}",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Debug Pipeline (Bridge)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "assembly_line.main",
+      "args": [
+        "--project", "demo_project",
+        "--file", "app/banking/payment_service.py",
+        "--task", "Fix payment transfer when balance cannot cover amount plus fee"
+      ],
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}\\src",
+        "LLM_BACKEND": "proxy_command",
+        "LLM_PROXY_COMMAND": "python tools/lm_proxy_http_client.py"
+      },
+      "cwd": "${workspaceFolder}",
+      "python": "${command:python.interpreterPath}",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    }
+  ]
+}

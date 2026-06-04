@@ -1,0 +1,101 @@
+{
+  "name": "copilot-lm-bridge-extension",
+  "displayName": "Copilot LM Bridge",
+  "description": "Local HTTP bridge from external tools to VS Code Language Model API.",
+  "version": "0.0.1",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "copilotLmBridge.startServer",
+        "title": "Copilot LM Bridge: Start Server"
+      },
+      {
+        "command": "copilotLmBridge.stopServer",
+        "title": "Copilot LM Bridge: Stop Server"
+      },
+      {
+        "command": "copilotLmBridge.requestConsent",
+        "title": "Copilot LM Bridge: Request Copilot Consent"
+      },
+      {
+        "command": "copilotLmBridge.runPipelineFix",
+        "title": "Copilot LM Bridge: Run Pipeline Fix For Active File"
+      },
+      {
+        "command": "copilotLmBridge.autoDetectFix",
+        "title": "Copilot LM Bridge: Auto-Detect and Fix Issues"
+      }
+    ],
+    "configuration": {
+      "title": "Copilot LM Bridge",
+      "properties": {
+        "copilotLmBridge.port": {
+          "type": "number",
+          "default": 8765,
+          "description": "Local HTTP server port for the bridge."
+        },
+        "copilotLmBridge.host": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "Host interface for the bridge server."
+        },
+        "copilotLmBridge.family": {
+          "type": "string",
+          "default": "gpt-4o",
+          "description": "Preferred Copilot model family."
+        },
+        "copilotLmBridge.autoStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically start bridge server when VS Code starts."
+        },
+        "copilotLmBridge.projectRoot": {
+          "type": "string",
+          "default": ".",
+          "description": "Target project root directory to fix. Relative paths resolve from the currently opened workspace."
+        },
+        "copilotLmBridge.assemblyLineRoot": {
+          "type": "string",
+          "default": "",
+          "description": "Directory that contains the assembly_line engine (src/ and tools/). Empty value means current workspace."
+        },
+        "copilotLmBridge.workspaceProjectRoot": {
+          "type": "string",
+          "default": "demo_project",
+          "description": "Legacy setting. Use copilotLmBridge.projectRoot instead."
+        },
+        "copilotLmBridge.outputDir": {
+          "type": "string",
+          "default": "outputs",
+          "description": "Output directory for patch.diff, evidence report, and run_log. Relative paths resolve from projectRoot."
+        },
+        "copilotLmBridge.proxyClientPath": {
+          "type": "string",
+          "default": "tools/lm_proxy_http_client.py",
+          "description": "Path to lm_proxy_http_client.py. Relative paths resolve from assemblyLineRoot."
+        },
+        "copilotLmBridge.setPythonPath": {
+          "type": "boolean",
+          "default": true,
+          "description": "When enabled, set PYTHONPATH=<assemblyLineRoot>/src automatically if that folder exists."
+        },
+        "copilotLmBridge.pythonCommand": {
+          "type": "string",
+          "default": "python",
+          "description": "Python command used to run the assembly line pipeline from the extension."
+        }
+      }
+    }
+  }
+}

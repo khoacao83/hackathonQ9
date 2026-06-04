@@ -1,0 +1,90 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build Copilot LM Bridge VSIX",
+      "type": "shell",
+      "command": "${command:python.interpreterPath}",
+      "args": [
+        "tools/package_vsix.py",
+        "--extension-dir",
+        "tools/copilot-lm-bridge-extension",
+        "--output",
+        "dist/copilot-lm-bridge-extension.vsix"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Install Copilot LM Bridge VSIX",
+      "type": "shell",
+      "command": "${env:LOCALAPPDATA}\\Programs\\Microsoft VS Code\\Code.exe",
+      "args": [
+        "--install-extension",
+        "${workspaceFolder}\\dist\\copilot-lm-bridge-extension.vsix",
+        "--force"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "dependsOn": "Build Copilot LM Bridge VSIX",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Run Demo Pipeline",
+      "type": "shell",
+      "command": "${command:python.interpreterPath}",
+      "args": [
+        "-m", "assembly_line.main",
+        "--project", "demo_project",
+        "--file", "app/banking/payment_service.py",
+        "--task", "Fix payment transfer when balance cannot cover amount plus fee"
+      ],
+      "options": {
+        "env": {
+          "PYTHONPATH": "${workspaceFolder}\\src"
+        },
+        "cwd": "${workspaceFolder}"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Run Tests (demo_project)",
+      "type": "shell",
+      "command": "${command:python.interpreterPath}",
+      "args": ["-m", "pytest", "demo_project/tests", "-v"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "test",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": []
+    }
+  ]
+}

@@ -1,59 +1,94 @@
-from __future__ import annotations
-
-import re
-from dataclasses import dataclass
-
-
-PATCH_FILE_RE = re.compile(r"^(?:--- a/|\+\+\+ b/)(?P<path>.+)$", re.MULTILINE)
+import fnmatch
+from pathlib import Path
+from typing import Any
 
 
-@dataclass(frozen=True)
-class PatchValidationResult:
-    valid: bool
-    changed_files: list[str]
-    errors: list[str]
+_DEFAULT_FORBIDDEN = [
+    "**/.env",
+    "**/.env.*",
+    "**/*.pem",
+    "**/*.key",
+    "**/secrets/**",
+]
 
 
-def validate_patch(patch_text: str, policy: dict | None = None) -> PatchValidationResult:
-    errors: list[str] = []
+def _normalize_rel(path_value: str) -> str:
+    rel = path_value.strip().replace('\\', '/')
+    if rel.startswith('a/') or rel.startswith('b/'):
+        rel = rel[2:]
+    return rel.lstrip('./')
 
-    if "--- a/" not in patch_text or "+++ b/" not in patch_text:
-        errors.append("Patch is not unified diff (missing --- a/ or +++ b/ headers)")
 
-    changed_files: list[str] = []
-    for match in PATCH_FILE_RE.finditer(patch_text):
-        raw = match.group("path").strip().replace("\\", "/")
-        if not raw or raw == "/dev/null":
-            continue
-        changed_files.append(raw)
+def extract_patch_targets(patch_text: str) -> list[str]:
+    targets: list[str] = []
+    for line in patch_text.splitlines():
+        if line.startswith('+++ '):
+            rel = _normalize_rel(line[4:])
+            if rel and rel != '/dev/null':
+                targets.append(rel)
+    # Deduplicate preserving order
+    seen = set()
+    unique: list[str] = []
+    for t in targets:
+        if t not in seen:
+            seen.add(t)
+            unique.append(t)
+    return unique
 
-    changed_files = sorted(set(changed_files))
 
-    if not changed_files:
-        errors.append("No target files detected in patch")
+def _build_forbidden_globs(policy: dict[str, Any]) -> list[str]:
+    patch_cfg = policy.get("patch", {}) if isinstance(policy, dict) else {}
+    forbidden = patch_cfg.get("forbidden_files", []) if isinstance(patch_cfg, dict) else []
+    out: list[str] = []
+    for item in forbidden:
+        if isinstance(item, str) and item.strip():
+            out.append(item.strip())
+    out.extend(_DEFAULT_FORBIDDEN)
+    return out
 
-    deny_patterns = [
-        r"(^|/)\.env($|\.)",
-        r"(^|/)secrets/",
-        r"\.pem$",
-        r"\.key$",
-        r"\.pfx$",
-    ]
 
-    if isinstance(policy, dict):
-        patch_policy = policy.get("patch", {})
-        deny_patterns.extend(list(patch_policy.get("deny_patterns", [])))
+def _is_forbidden(rel: str, globs: list[str]) -> bool:
+    for pat in globs:
+        if fnmatch.fnmatch(rel, pat):
+            return True
+    return False
 
-    for file in changed_files:
-        if "../" in file or file.startswith("/"):
-            errors.append(f"Unsafe target path: {file}")
-            continue
 
-        if any(re.search(pattern, file, flags=re.IGNORECASE) for pattern in deny_patterns):
-            errors.append(f"Forbidden patch target: {file}")
+def validate_patch(
+    patch_text: str,
+    project_root: str,
+    allowed_files: list[str],
+    policy: dict[str, Any],
+) -> tuple[bool, str, list[str]]:
+    """
+    Validate unified diff format and policy constraints.
 
-    return PatchValidationResult(
-        valid=not errors,
-        changed_files=changed_files,
-        errors=errors,
-    )
+    Returns: (ok, reason, patch_targets)
+    """
+    if not patch_text.strip():
+        return False, "Patch is empty", []
+
+    if "--- " not in patch_text or "+++ " not in patch_text:
+        return False, "Patch is not a unified diff", []
+
+    targets = extract_patch_targets(patch_text)
+    if not targets:
+        return False, "Patch does not contain valid target file headers", []
+
+    forbidden_globs = _build_forbidden_globs(policy)
+
+    normalized_allowed = set()
+    for f in allowed_files:
+        rel = _normalize_rel(f)
+        if rel:
+            normalized_allowed.add(rel)
+
+    for rel in targets:
+        if Path(rel).is_absolute() or rel.startswith("../") or "/../" in rel:
+            return False, f"Forbidden patch target path: {rel}", targets
+        if _is_forbidden(rel, forbidden_globs):
+            return False, f"Patch target blocked by policy: {rel}", targets
+        if normalized_allowed and rel not in normalized_allowed:
+            return False, f"Patch target outside allowed scope: {rel}", targets
+
+    return True, "", targets

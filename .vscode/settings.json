@@ -1,0 +1,5 @@
+{
+  "copilotLmBridge.assemblyLineRoot": "C:/OJT/ai-code-assembly-line",
+  "copilotLmBridge.proxyClientPath": "tools/lm_proxy_http_client.py",
+  "copilotLmBridge.pythonCommand": "python"
+}

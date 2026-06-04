@@ -1,46 +1,35 @@
+# AI Code Assembly Line — Pipeline Policy
+# Read by orchestrator to enforce enterprise guardrails.
+
+pipeline:
+  max_attempts: 3          # Maximum self-healing retries before escalation
+  sandbox_isolation: true  # Always patch in temp sandbox, never touch source
+
+graph:
+  max_depth: 2             # Multi-hop depth for import graph scan
+
 sandbox:
-  max_self_heal_attempts: 3
-  test_timeout_seconds: 30
-  use_docker: false
-  strict_docker: false
-  docker_image: ai-code-sandbox:py311
-  docker_network: none
-  docker_memory: 512m
-  docker_cpus: "1.0"
+  test_timeout_seconds: 120
+  docker_test_timeout_seconds: 180
+  strict_mode: false       # true => when USE_DOCKER=1 and docker unavailable, fail instead of local fallback
 
 context:
-  import_depth: 1
-  max_file_chars: 50000
-  deny_file_globs:
-    - "**/.env"
-    - "**/*.pem"
-    - "**/*.key"
-    - "secrets/**"
-  keep_comment_keywords:
-    - TODO
-    - FIXME
-    - NOTE
-    - IMPORTANT
-    - CHÚ Ý
-  deny_regex:
-    - (?i)api[_-]?key\s*=\s*['\"][^'\"]+['\"]
-    - (?i)secret[_-]?key\s*=\s*['\"][^'\"]+['\"]
-    - (?i)password\s*=\s*['\"][^'\"]+['\"]
-    - -----BEGIN [A-Z ]+ PRIVATE KEY-----
-
-llm:
-  mode: provider
-  provider: mock
-  model: ""
-  base_url: ""
+  token_estimate_method: "len_div_4"   # estimated_tokens = len(text) // 4
+  keep_comment_patterns:               # Comments to preserve during pruning
+    - "TODO"
+    - "FIXME"
+    - "NOTE"
+    - "IMPORTANT"
+    - "CHÚ Ý"
 
 patch:
-  deny_patterns:
-    - "(^|/)\\.env($|\\.)"
-    - "(^|/)secrets/"
-    - "\\.pem$"
-    - "\\.key$"
+  allowed_target_files:    # Only these paths may be patched
+    - "app/banking/*.py"
+    - "app/inventory/*.py"
+  forbidden_files:         # Never modify these
+    - "tests/**"
+    - "configs/**"
 
-report:
-  final_pass_decision: READY_FOR_HUMAN_REVIEW
-  final_fail_decision: NEED_DEVELOPER_REVIEW
+decisions:
+  pass_label: "READY_FOR_HUMAN_REVIEW"
+  fail_label: "NEED_DEVELOPER_REVIEW"

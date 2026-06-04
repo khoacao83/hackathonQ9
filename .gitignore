@@ -11,3 +11,4 @@ node_modules/
 dist/
 out/
 *.log
+src/assembly_line.egg-info/
