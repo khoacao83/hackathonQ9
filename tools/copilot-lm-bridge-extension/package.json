@@ -15,6 +15,24 @@
   ],
   "main": "./extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "copilot-lm-bridge-sidebar",
+          "title": "AI Assembly Line",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "copilot-lm-bridge-sidebar": [
+        {
+          "type": "webview",
+          "id": "copilotLmBridge.sidebarView",
+          "name": "Assembly Line Console"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "copilotLmBridge.startServer",

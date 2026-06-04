@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#8A2387;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#E94057;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#F27121;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <!-- Gear shape -->
+  <path fill="url(#grad)" d="M12,15.5A3.5,3.5,0,1,1,15.5,12,3.5,3.5,0,0,1,12,15.5m0-9A7,7,0,1,0,19,12,7,7,0,0,0,12,6.5m10,4.75V10.75l-2.06-.34a8.39,8.39,0,0,0-.73-1.78l1.45-1.52L16.4,5.85,14.88,7.3a8.39,8.39,0,0,0-1.78-.73l-.35-2.07H11.25l-.34,2.06a8.39,8.39,0,0,0-1.78.73L7.6,5.85,6.34,7.11l1.45,1.52a8.39,8.39,0,0,0-.73,1.78l-2.06.35v1.5l2.06.34a8.39,8.39,0,0,0,.73,1.78l-1.45,1.52,1.26,1.26,1.52-1.45a8.39,8.39,0,0,0,1.78.73l.35,2.07h1.5l.34-2.06a8.39,8.39,0,0,0,1.78-.73l1.52,1.45,1.26-1.26-1.45-1.52a8.39,8.39,0,0,0,.73-1.78Z"/>
+  <!-- Central lightning bolt representing AI speed -->
+  <polygon points="12,7 8,13 11,13 10,18 15,11 12,11" fill="#FFFFFF" />
+</svg>

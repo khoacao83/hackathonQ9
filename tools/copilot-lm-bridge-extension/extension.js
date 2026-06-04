@@ -5,6 +5,7 @@ const fs = require('fs');
 const childProcess = require('child_process');
 
 let server;
+let globalSidebarProvider = undefined;
 
 function readJsonSafe(filePath) {
   try {
@@ -161,17 +162,28 @@ function createPipelineEnv(config, assemblyLineRoot, proxyClientPath) {
   return env;
 }
 
-function spawnPipeline(channel, config, assemblyLineRoot, env, args) {
+function spawnPipeline(channel, config, assemblyLineRoot, env, args, onData) {
   return new Promise(resolve => {
-    channel.appendLine(`[pipeline] ${config.pythonCommand} ${args.join(' ')}`);
+    const startMsg = `[pipeline] ${config.pythonCommand} ${args.join(' ')}`;
+    channel.appendLine(startMsg);
+    if (onData) { onData(startMsg + '\n'); }
+
     const child = childProcess.spawn(config.pythonCommand, args, {
       cwd: assemblyLineRoot,
       env,
       shell: false,
     });
 
-    child.stdout.on('data', data => channel.append(data.toString()));
-    child.stderr.on('data', data => channel.append(data.toString()));
+    child.stdout.on('data', data => {
+      const txt = data.toString();
+      channel.append(txt);
+      if (onData) { onData(txt); }
+    });
+    child.stderr.on('data', data => {
+      const txt = data.toString();
+      channel.append(txt);
+      if (onData) { onData(txt); }
+    });
     child.on('close', code => resolve(code ?? 1));
   });
 }
@@ -284,7 +296,11 @@ async function reviewAutoDetectBatch({ channel, config, assemblyLineRoot, env, p
       '--apply-source',
     ];
 
-    const applyCode = await spawnPipeline(channel, config, assemblyLineRoot, env, args);
+    const applyCode = await spawnPipeline(channel, config, assemblyLineRoot, env, args, (data) => {
+      if (globalSidebarProvider) {
+        globalSidebarProvider.appendLog(data);
+      }
+    });
     if (applyCode === 0) {
       accepted += 1;
       channel.appendLine(`[review] accepted and applied ${current.file}`);
@@ -383,7 +399,7 @@ function resolveTargetFileFromActiveEditor(projectRootPath) {
   return normalizeToPosix(path.relative(projectRootPath, filePath));
 }
 
-async function runPipelineFixCommand() {
+async function runPipelineFixCommand(inputTask) {
   const workspaceRoot = getWorkspaceRoot();
   if (!workspaceRoot) {
     vscode.window.showErrorMessage('Copilot LM Bridge: open a workspace folder first.');
@@ -416,7 +432,7 @@ async function runPipelineFixCommand() {
     return;
   }
 
-  const task = await vscode.window.showInputBox({
+  const task = inputTask || await vscode.window.showInputBox({
     prompt: 'Describe the fix task',
     placeHolder: 'Fix payment transfer when balance cannot cover amount plus fee',
     ignoreFocusOut: true,
@@ -424,6 +440,12 @@ async function runPipelineFixCommand() {
 
   if (!task) {
     return;
+  }
+
+  if (globalSidebarProvider) {
+    globalSidebarProvider.clearLog();
+    globalSidebarProvider.appendLog(`[Assembly Line] Bắt đầu sửa file: ${targetFile}\n`);
+    globalSidebarProvider.appendLog(`[Assembly Line] Yêu cầu: "${task}"\n\n`);
   }
 
   const channel = vscode.window.createOutputChannel('AI Code Assembly Line');
@@ -441,6 +463,10 @@ async function runPipelineFixCommand() {
     config,
   });
   channel.appendLine(`[precheck] ${precheck.reason}`);
+  if (globalSidebarProvider) {
+    globalSidebarProvider.appendLog(`[Precheck] ${precheck.reason}\n`);
+  }
+
   if (!precheck.ok) {
     writePrecheckFailureArtifacts(outputDir, task, targetFile, precheck.reason);
     vscode.window.showWarningMessage(precheck.reason);
@@ -474,6 +500,9 @@ async function runPipelineFixCommand() {
 
   let modelPatch = '';
   try {
+    if (globalSidebarProvider) {
+      globalSidebarProvider.appendLog(`[LLM] Đang yêu cầu sinh bản vá từ Copilot Language Model...\n`);
+    }
     const lmResult = await runModelRequest({
       task,
       target_file: targetFile,
@@ -481,14 +510,23 @@ async function runPipelineFixCommand() {
       prompt: generationPrompt,
     });
     modelPatch = extractUnifiedDiff(lmResult);
+    if (globalSidebarProvider) {
+      globalSidebarProvider.appendLog(`[LLM] Nhận bản vá thành công.\n`);
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     vscode.window.showErrorMessage(`Copilot LM Bridge patch generation failed: ${message}`);
+    if (globalSidebarProvider) {
+      globalSidebarProvider.appendLog(`[LỖI] Sinh bản vá thất bại: ${message}\n`);
+    }
     return;
   }
 
   if (!modelPatch || !modelPatch.trim()) {
     vscode.window.showErrorMessage('Copilot LM Bridge: model returned empty patch.');
+    if (globalSidebarProvider) {
+      globalSidebarProvider.appendLog(`[LỖI] Model trả về bản vá rỗng.\n`);
+    }
     return;
   }
 
@@ -511,7 +549,15 @@ async function runPipelineFixCommand() {
   channel.appendLine(`[pipeline] project_root=${projectRoot}`);
   channel.appendLine(`[pipeline] saved generated patch -> ${patchFile}`);
 
-  const validateCode = await spawnPipeline(channel, config, assemblyLineRoot, env, baseArgs);
+  if (globalSidebarProvider) {
+    globalSidebarProvider.appendLog(`[Pipeline] Chạy lệnh python: ${config.pythonCommand} ${baseArgs.join(' ')}\n`);
+  }
+
+  const validateCode = await spawnPipeline(channel, config, assemblyLineRoot, env, baseArgs, (data) => {
+    if (globalSidebarProvider) {
+      globalSidebarProvider.appendLog(data);
+    }
+  });
   channel.appendLine(`\n[pipeline] validate process exited with code ${validateCode}`);
 
   const runLogPath = path.join(outputDir, 'run_log.json');
@@ -529,6 +575,9 @@ async function runPipelineFixCommand() {
     vscode.window.showWarningMessage(
       `AI Code Assembly Line finished with decision ${decision}.${typeof savingPct !== 'undefined' ? ` Token saving: ${savingPct}%` : ''}`
     );
+    if (globalSidebarProvider) {
+      globalSidebarProvider.appendLog(`\n[Kết quả] Kiểm thử thất bại. Quyết định: ${decision}\n`);
+    }
     return;
   }
 
@@ -543,25 +592,62 @@ async function runPipelineFixCommand() {
     }
   }
 
-  const consent = await vscode.window.showInformationMessage(
-    `Validated patch is ready. Review patch.diff, then choose Accept or Reject.${typeof savingPct !== 'undefined' ? ` (Token saving: ${savingPct}%)` : ''}`,
-    { modal: true },
-    'Accept',
-    'Reject'
-  );
+  let consent;
+  if (globalSidebarProvider) {
+    globalSidebarProvider.appendLog(`\n[Chờ Duyệt] Bản vá kiểm định xong. Đang chờ bạn phê duyệt...\n`);
+    consent = await new Promise((resolve) => {
+      globalSidebarProvider.showReview(targetFile, savingPct || 'n/a', (decision) => {
+        resolve(decision);
+      });
+      // Also show standard information message
+      vscode.window.showInformationMessage(
+        `Validated patch is ready. Review patch.diff, then choose Accept or Reject.${typeof savingPct !== 'undefined' ? ` (Token saving: ${savingPct}%)` : ''}`,
+        { modal: true },
+        'Accept',
+        'Reject'
+      ).then(res => {
+        if (res) resolve(res);
+      });
+    });
+    globalSidebarProvider.hideReview();
+  } else {
+    consent = await vscode.window.showInformationMessage(
+      `Validated patch is ready. Review patch.diff, then choose Accept or Reject.${typeof savingPct !== 'undefined' ? ` (Token saving: ${savingPct}%)` : ''}`,
+      { modal: true },
+      'Accept',
+      'Reject'
+    );
+  }
 
   if (consent !== 'Accept') {
     channel.appendLine('[pipeline] user rejected source apply.');
     vscode.window.showInformationMessage('Patch validation completed. Source file unchanged.');
+    if (globalSidebarProvider) {
+      globalSidebarProvider.appendLog(`[Từ Chối] Người dùng từ chối áp dụng bản vá.\n`);
+    }
     return;
   }
 
-  const applyCode = await spawnPipeline(channel, config, assemblyLineRoot, env, [...baseArgs, '--apply-source']);
+  if (globalSidebarProvider) {
+    globalSidebarProvider.appendLog(`[Áp Dụng] Đang áp dụng bản vá vào mã nguồn gốc...\n`);
+  }
+
+  const applyCode = await spawnPipeline(channel, config, assemblyLineRoot, env, [...baseArgs, '--apply-source'], (data) => {
+    if (globalSidebarProvider) {
+      globalSidebarProvider.appendLog(data);
+    }
+  });
   channel.appendLine(`\n[pipeline] apply process exited with code ${applyCode}`);
   if (applyCode === 0) {
     vscode.window.showInformationMessage('Patch applied to source after user approval.');
+    if (globalSidebarProvider) {
+      globalSidebarProvider.appendLog(`[Hoàn Thành] Bản vá đã được áp dụng thành công!\n`);
+    }
   } else {
     vscode.window.showErrorMessage(`Validated apply step failed (code ${applyCode}).`);
+    if (globalSidebarProvider) {
+      globalSidebarProvider.appendLog(`[LỖI] Áp dụng bản vá thất bại với code: ${applyCode}\n`);
+    }
   }
 }
 
@@ -589,6 +675,11 @@ async function runAutoDetectFixCommand() {
   }
 
   await startServer();
+
+  if (globalSidebarProvider) {
+    globalSidebarProvider.clearLog();
+    globalSidebarProvider.appendLog(`[Auto-Detect] Khởi động chế độ quét và tự động sửa lỗi toàn bộ dự án...\n`);
+  }
 
   const channel = vscode.window.createOutputChannel('AI Code Assembly Line - Auto-Fix');
   channel.show(true);
@@ -625,17 +716,35 @@ async function runAutoDetectFixCommand() {
   channel.appendLine('[auto-detect] local runner only (USE_DOCKER=0).');
   channel.appendLine(`[auto-detect] Starting auto-detect and fix...\n`);
 
+  if (globalSidebarProvider) {
+    globalSidebarProvider.appendLog(`[Auto-Detect] Chạy lệnh: ${config.pythonCommand} ${args.join(' ')}\n\n`);
+  }
+
   const child = childProcess.spawn(config.pythonCommand, args, {
     cwd: assemblyLineRoot,
     env,
     shell: false,
   });
 
-  child.stdout.on('data', data => channel.append(data.toString()));
-  child.stderr.on('data', data => channel.append(data.toString()));
+  child.stdout.on('data', data => {
+    channel.append(data.toString());
+    if (globalSidebarProvider) {
+      globalSidebarProvider.appendLog(data.toString());
+    }
+  });
+  child.stderr.on('data', data => {
+    channel.append(data.toString());
+    if (globalSidebarProvider) {
+      globalSidebarProvider.appendLog(data.toString());
+    }
+  });
 
   child.on('close', async code => {
     channel.appendLine(`\n[auto-detect] process exited with code ${code}`);
+    if (globalSidebarProvider) {
+      globalSidebarProvider.appendLog(`\n[Auto-Detect] Quá trình quét hoàn tất với code: ${code}\n`);
+    }
+
     const summaryPath = path.join(outputDir, 'auto_fix_summary.json');
     const review = await reviewAutoDetectBatch({
       channel,
@@ -778,7 +887,531 @@ async function requestConsent() {
   }
 }
 
+// ── Webview Sidebar Provider Implementation (Minimal Native Style) ───────
+class SidebarProvider {
+  constructor(context) {
+    this.context = context;
+    this._view = undefined;
+    this._onReviewDecision = undefined;
+  }
+
+  resolveWebviewView(webviewView, context, token) {
+    this._view = webviewView;
+
+    webviewView.webview.options = {
+      enableScripts: true,
+      localResourceRoots: [this.context.extensionUri]
+    };
+
+    webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
+
+    webviewView.webview.onDidReceiveMessage(async (data) => {
+      switch (data.type) {
+        case 'startServer':
+          try {
+            await startServer();
+            vscode.window.showInformationMessage('Copilot LM Bridge server started.');
+          } catch (err) {
+            vscode.window.showErrorMessage(`Failed to start server: ${err.message}`);
+          }
+          this.updateState();
+          break;
+        case 'stopServer':
+          try {
+            await stopServer();
+            vscode.window.showInformationMessage('Copilot LM Bridge server stopped.');
+          } catch (err) {
+            vscode.window.showErrorMessage(`Failed to stop server: ${err.message}`);
+          }
+          this.updateState();
+          break;
+        case 'runFix':
+          runPipelineFixCommand(data.task);
+          break;
+        case 'runAutoDetect':
+          runAutoDetectFixCommand();
+          break;
+        case 'acceptPatch':
+          if (this._onReviewDecision) {
+            this._onReviewDecision('Accept');
+          }
+          break;
+        case 'rejectPatch':
+          if (this._onReviewDecision) {
+            this._onReviewDecision('Reject');
+          }
+          break;
+        case 'clearConsole':
+          this.clearLog();
+          break;
+        case 'refreshState':
+          this.updateState();
+          break;
+      }
+    });
+
+    this.updateState();
+  }
+
+  updateState() {
+    if (!this._view) return;
+    const config = getConfig();
+    const workspaceRoot = getWorkspaceRoot() || '';
+    const projectRoot = resolveConfigPath(workspaceRoot, config.projectRoot);
+    const activeFile = resolveTargetFileFromActiveEditor(projectRoot) || '';
+
+    childProcess.exec(`"${config.pythonCommand}" --version`, (err, stdout, stderr) => {
+      let ver = (stdout || stderr || '').trim();
+      if (err) {
+        ver = "Không khả dụng";
+      }
+      if (this._view) {
+        this._view.webview.postMessage({
+          type: 'state',
+          serverRunning: !!server,
+          host: config.host,
+          port: config.port,
+          activeFile: activeFile,
+          pythonVersion: ver
+        });
+      }
+    });
+  }
+
+  appendLog(text) {
+    if (this._view) {
+      this._view.webview.postMessage({ type: 'log', text });
+    }
+  }
+
+  clearLog() {
+    if (this._view) {
+      this._view.webview.postMessage({ type: 'clearLog' });
+    }
+  }
+
+  showReview(file, saving, onDecision) {
+    this._onReviewDecision = onDecision;
+    if (this._view) {
+      this._view.webview.postMessage({
+        type: 'pendingReview',
+        visible: true,
+        file,
+        saving
+      });
+    }
+  }
+
+  hideReview() {
+    this._onReviewDecision = undefined;
+    if (this._view) {
+      this._view.webview.postMessage({
+        type: 'pendingReview',
+        visible: false
+      });
+    }
+  }
+
+  _getHtmlForWebview(webview) {
+    return `<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body {
+      padding: 12px;
+      color: var(--vscode-foreground);
+      font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+      font-size: var(--vscode-font-size, 13px);
+      background-color: var(--vscode-sideBar-background);
+      margin: 0;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+    
+    /* Top minimal status bar */
+    .status-container {
+      font-size: 11px;
+      color: var(--vscode-descriptionForeground);
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--vscode-panel-border, rgba(255, 255, 255, 0.08));
+      padding-bottom: 6px;
+    }
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 4px;
+    }
+    .status-dot.active {
+      background-color: #2ecc71;
+    }
+    .status-dot.inactive {
+      background-color: #e74c3c;
+    }
+
+    /* Main output log area (looks like chat bubbles / clean thread) */
+    .thread-area {
+      flex: 1;
+      overflow-y: auto;
+      margin-bottom: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding-right: 2px;
+    }
+    .log-entry {
+      font-size: 12px;
+      line-height: 1.4;
+      color: var(--vscode-foreground);
+      background-color: var(--vscode-textBlockQuote-background, rgba(255,255,255,0.02));
+      border-left: 2px solid var(--vscode-textBlockQuote-border, rgba(255,255,255,0.1));
+      padding: 6px 10px;
+      border-radius: 0 6px 6px 0;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .log-system {
+      color: var(--vscode-descriptionForeground);
+      font-size: 11px;
+      font-style: italic;
+    }
+
+    /* Approval Section (clean card) */
+    .approval-container {
+      background-color: var(--vscode-editor-background);
+      border: 1px solid var(--vscode-panel-border, rgba(255, 255, 255, 0.1));
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 10px;
+    }
+    .approval-title {
+      font-weight: bold;
+      font-size: 12px;
+      margin-bottom: 4px;
+      color: #2ecc71;
+    }
+    .approval-desc {
+      font-size: 11px;
+      color: var(--vscode-descriptionForeground);
+      margin-bottom: 8px;
+    }
+    .approval-buttons {
+      display: flex;
+      gap: 8px;
+    }
+    .btn-approve {
+      flex: 1;
+      background-color: var(--vscode-button-background, #007acc);
+      color: var(--vscode-button-foreground, #fff);
+      border: none;
+      border-radius: 4px;
+      padding: 6px;
+      font-size: 11px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    .btn-approve:hover {
+      background-color: var(--vscode-button-hoverBackground, #0062a3);
+    }
+    .btn-reject {
+      flex: 1;
+      background-color: var(--vscode-button-secondaryBackground, rgba(255,255,255,0.1));
+      color: var(--vscode-button-secondaryForeground, #ccc);
+      border: none;
+      border-radius: 4px;
+      padding: 6px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .btn-reject:hover {
+      background-color: rgba(255,255,255,0.15);
+    }
+
+    /* Input area at the bottom - styled exactly like the Gemini chat box */
+    .input-container {
+      background-color: var(--vscode-input-background, rgba(0, 0, 0, 0.2));
+      border: 1px solid var(--vscode-input-border, rgba(255, 255, 255, 0.15));
+      border-radius: 8px;
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .input-container:focus-within {
+      border-color: var(--vscode-focusBorder, #007acc);
+      outline: none;
+    }
+    .target-file-indicator {
+      font-size: 10px;
+      color: var(--vscode-descriptionForeground);
+      text-overflow: ellipsis;
+      overflow: hidden;
+      white-space: nowrap;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      padding-bottom: 4px;
+    }
+    textarea {
+      background: transparent;
+      border: none;
+      color: var(--vscode-input-foreground, #fff);
+      font-family: inherit;
+      font-size: 12px;
+      resize: none;
+      width: 100%;
+      height: 48px;
+      outline: none;
+      box-sizing: border-box;
+      padding: 0;
+    }
+    textarea::placeholder {
+      color: var(--vscode-input-placeholderForeground, rgba(255, 255, 255, 0.35));
+    }
+    .input-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .action-left {
+      display: flex;
+      gap: 6px;
+    }
+    .btn-icon-action {
+      background: transparent;
+      border: none;
+      color: var(--vscode-descriptionForeground);
+      cursor: pointer;
+      font-size: 10px;
+      padding: 2px 4px;
+      border-radius: 3px;
+      text-decoration: underline;
+    }
+    .btn-icon-action:hover {
+      color: var(--vscode-foreground);
+    }
+    .btn-submit {
+      background-color: var(--vscode-button-background, #007acc);
+      color: var(--vscode-button-foreground, #fff);
+      border: none;
+      border-radius: 4px;
+      padding: 4px 10px;
+      font-size: 11px;
+      font-weight: bold;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .btn-submit:hover {
+      background-color: var(--vscode-button-hoverBackground, #0062a3);
+    }
+    .btn-submit svg {
+      width: 10px;
+      height: 10px;
+      fill: currentColor;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top status indicators -->
+  <div class="status-container">
+    <div>
+      <span id="serverDot" class="status-dot inactive"></span>
+      <span id="serverStatusText">Server Offline</span>
+    </div>
+    <div id="pythonText">Python --</div>
+  </div>
+
+  <!-- Review / Approve panel -->
+  <div id="approvalPanel" class="approval-container" style="display: none;">
+    <div class="approval-title">Bản vá hoàn tất</div>
+    <div class="approval-desc">
+      Đã kiểm thử thành công tệp <span id="reviewFile" style="font-family: monospace;">...</span>. Tiết kiệm token: <span id="reviewSaving" style="font-weight:bold;">0%</span>.
+    </div>
+    <div class="approval-buttons">
+      <button class="btn-approve" id="btnAccept">Đồng Ý (Accept)</button>
+      <button class="btn-reject" id="btnReject">Từ Chối (Reject)</button>
+    </div>
+  </div>
+
+  <!-- Chat / Log Thread -->
+  <div class="thread-area" id="threadArea">
+    <div class="log-entry log-system">Hệ thống Assembly Line đã sẵn sàng. Hãy nhập yêu cầu của bạn ở ô bên dưới.</div>
+  </div>
+
+  <!-- Bottom Input Box (Gemini Chat Style) -->
+  <div class="input-container">
+    <div class="target-file-indicator" id="fileIndicator">
+      Đang sửa: Không có tệp Python nào đang mở
+    </div>
+    <textarea id="taskInput" placeholder="Ask assembly line to fix current file..."></textarea>
+    <div class="input-actions">
+      <div class="action-left">
+        <button class="btn-icon-action" id="btnAutoDetect">Auto-Fix Toàn Bộ</button>
+        <button class="btn-icon-action" id="btnToggleServer">Khởi Động Server</button>
+        <button class="btn-icon-action" id="btnClearLog">Xóa Nhật Ký</button>
+      </div>
+      <button class="btn-submit" id="btnSubmit">
+        <span>Gửi</span>
+        <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <script>
+    const vscode = acquireVsCodeApi();
+    
+    const serverDot = document.getElementById('serverDot');
+    const serverStatusText = document.getElementById('serverStatusText');
+    const btnToggleServer = document.getElementById('btnToggleServer');
+    const pythonText = document.getElementById('pythonText');
+    const fileIndicator = document.getElementById('fileIndicator');
+    const taskInput = document.getElementById('taskInput');
+    const btnSubmit = document.getElementById('btnSubmit');
+    const btnAutoDetect = document.getElementById('btnAutoDetect');
+    const btnClearLog = document.getElementById('btnClearLog');
+    const threadArea = document.getElementById('threadArea');
+
+    const approvalPanel = document.getElementById('approvalPanel');
+    const reviewFile = document.getElementById('reviewFile');
+    const reviewSaving = document.getElementById('reviewSaving');
+    const btnAccept = document.getElementById('btnAccept');
+    const btnReject = document.getElementById('btnReject');
+
+    let isServerRunning = false;
+
+    // Handle messages from Extension backend
+    window.addEventListener('message', event => {
+      const message = event.data;
+      switch (message.type) {
+        case 'state':
+          isServerRunning = message.serverRunning;
+          serverDot.className = 'status-dot ' + (isServerRunning ? 'active' : 'inactive');
+          serverStatusText.textContent = isServerRunning ? 'Server: Active' : 'Server: Offline';
+          btnToggleServer.textContent = isServerRunning ? 'Tắt Server' : 'Khởi Động Server';
+
+          pythonText.textContent = message.pythonVersion || 'Python --';
+          
+          if (message.activeFile) {
+            fileIndicator.textContent = 'Đang sửa: ' + message.activeFile;
+            fileIndicator.style.color = 'var(--vscode-textLink-foreground)';
+          } else {
+            fileIndicator.textContent = 'Đang sửa: (Hãy mở một tệp .py để kích hoạt)';
+            fileIndicator.style.color = 'var(--vscode-descriptionForeground)';
+          }
+          break;
+
+        case 'log':
+          appendLogMessage(message.text);
+          break;
+
+        case 'clearLog':
+          threadArea.innerHTML = '<div class="log-entry log-system">Nhật ký đã được xóa.</div>';
+          break;
+
+        case 'pendingReview':
+          if (message.visible) {
+            reviewFile.textContent = message.file;
+            reviewSaving.textContent = message.saving + '%';
+            approvalPanel.style.display = 'block';
+          } else {
+            approvalPanel.style.display = 'none';
+          }
+          break;
+      }
+    });
+
+    function appendLogMessage(text) {
+      if (!text.trim()) return;
+      const cleanText = text.trim();
+      const div = document.createElement('div');
+      
+      if (cleanText.startsWith('[') || cleanText.startsWith('---') || cleanText.startsWith('+++')) {
+        div.className = 'log-entry log-system';
+      } else {
+        div.className = 'log-entry';
+      }
+      
+      div.textContent = cleanText;
+      threadArea.appendChild(div);
+      threadArea.scrollTop = threadArea.scrollHeight;
+    }
+
+    // Input handlers
+    btnSubmit.addEventListener('click', () => {
+      const task = taskInput.value.trim();
+      if (!task) return;
+      vscode.postMessage({ type: 'runFix', task: task });
+      taskInput.value = '';
+    });
+
+    taskInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        btnSubmit.click();
+      }
+    });
+
+    btnToggleServer.addEventListener('click', () => {
+      if (isServerRunning) {
+        vscode.postMessage({ type: 'stopServer' });
+      } else {
+        vscode.postMessage({ type: 'startServer' });
+      }
+    });
+
+    btnAutoDetect.addEventListener('click', () => {
+      vscode.postMessage({ type: 'runAutoDetect' });
+    });
+
+    btnClearLog.addEventListener('click', () => {
+      vscode.postMessage({ type: 'clearConsole' });
+    });
+
+    btnAccept.addEventListener('click', () => {
+      vscode.postMessage({ type: 'acceptPatch' });
+    });
+
+    btnReject.addEventListener('click', () => {
+      vscode.postMessage({ type: 'rejectPatch' });
+    });
+
+    // Refresh state
+    setInterval(() => {
+      vscode.postMessage({ type: 'refreshState' });
+    }, 2000);
+  </script>
+</body>
+</html>`;
+  }
+}
+
 async function activate(context) {
+  globalSidebarProvider = new SidebarProvider(context);
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(
+      'copilotLmBridge.sidebarView',
+      globalSidebarProvider
+    )
+  );
+
+  // Auto-detect when active editor switches
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveTextEditor(() => {
+      if (globalSidebarProvider) {
+        globalSidebarProvider.updateState();
+      }
+    })
+  );
+
   context.subscriptions.push(
     vscode.commands.registerCommand('copilotLmBridge.startServer', async () => {
       try {
@@ -787,6 +1420,9 @@ async function activate(context) {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         vscode.window.showErrorMessage(`Failed to start Copilot LM Bridge: ${message}`);
+      }
+      if (globalSidebarProvider) {
+        globalSidebarProvider.updateState();
       }
     })
   );
@@ -799,6 +1435,9 @@ async function activate(context) {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         vscode.window.showErrorMessage(`Failed to stop Copilot LM Bridge: ${message}`);
+      }
+      if (globalSidebarProvider) {
+        globalSidebarProvider.updateState();
       }
     })
   );
